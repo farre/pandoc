@@ -39,7 +39,7 @@ import Control.Applicative (many, optional, (<|>))
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Data.Char (chr, isAlphaNum, isLetter, ord)
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate, isPrefixOf, nub)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, maybeToList)
 import Safe (minimumDef)
@@ -393,6 +393,7 @@ blockCommands = M.fromList $
   , ("graphicspath", graphicsPath)
   -- hyperlink
   , ("hypertarget", braced >> grouped block)
+  , ("hypersetup", skipopts *> hyperSetup)
   ] ++ map ignoreBlocks
   -- these commands will be ignored unless --parse-raw is specified,
   -- in which case they will appear as raw latex blocks
@@ -423,6 +424,17 @@ graphicsPath = do
 addMeta :: PandocMonad m => ToMetaValue a => String -> a -> LP m ()
 addMeta field val = updateState $ \st ->
   st{ stateMeta = addMetaField field val $ stateMeta st }
+
+addNubbedMeta :: PandocMonad m => ToMetaValue a => String -> a -> LP m ()
+addNubbedMeta field val = updateState $ \st ->
+  st{ stateMeta = addMetaField' $ stateMeta st }
+  where
+    addMetaField' (Meta meta) =
+        Meta $ M.insertWith combine field (toMetaValue val) meta
+    combine newval (MetaList xs) = MetaList (nub $ xs ++ tolist newval)
+    combine newval x             = MetaList (nub [x, newval])
+    tolist (MetaList ys)         = ys
+    tolist y                     = [y]
 
 splitBibs :: String -> [Inlines]
 splitBibs = map (str . flip replaceExtension "bib" . trim) . splitBy (==',')
@@ -1105,6 +1117,20 @@ parseListingsOptions options =
              ++ maybeToList (lookup "language" options
                      >>= fromListingsLanguage)
   in  (fromMaybe "" (lookup "label" options), classes, kvs)
+
+hyperSetup :: PandocMonad m => LP m Blocks
+hyperSetup = do
+  bgroup
+  skipMany (spaceChar <|> newline)
+  vs <- many (keyval <* skipMany (spaceChar <|> newline))
+  mapM_ (\(k, v) -> fromMaybe (const (pure mempty)) (M.lookup k hyperSetupField) v) vs
+  egroup
+  pure mempty
+  where
+    hyperSetupField = M.fromList $
+      [("pdftitle", (addNubbedMeta "title") . trimInlines . text),
+       ("pdfauthor", (addNubbedMeta "author") . (map (trimInlines . text)) . (splitBy (==';'))),
+       ("pdfkeywords", (addNubbedMeta "keywords") . trimInlines . text)]
 
 ----
 
